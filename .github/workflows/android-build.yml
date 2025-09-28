@@ -40,27 +40,34 @@ jobs:
                     primary: Color(0xFFC49A41), secondary: Color(0xFF557153),
                   ),
                 ),
-                home: Scaffold(
-                  appBar: AppBar(title: const Text('Розподіл коштів')),
-                  body: const Center(child: Text('Баланс (демо)', style: TextStyle(fontSize: 22))),
-                  floatingActionButton: FloatingActionButton.extended(
-                    onPressed: null, label: Text('Додати'), icon: Icon(Icons.add)),
-                ),
+                home: const _Home();
+              );
+            }
+          }
+          class _Home extends StatelessWidget {
+            const _Home();
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(title: const Text('Розподіл коштів')),
+                body: const Center(child: Text('Баланс (демо)', style: TextStyle(fontSize: 22))),
+                floatingActionButton: FloatingActionButton.extended(
+                  onPressed: null, label: Text('Додати'), icon: Icon(Icons.add)),
               );
             }
           }
           EOF
 
-      # Примусово задаємо УНІКАЛЬНИЙ applicationId, щоб не було конфлікту з уже встановленими
-      - name: Set unique applicationId
+      # ГАРАНТОВАНО унікальний package та сумісна minSdk
+      - name: Ensure unique applicationId and minSdk
         run: |
-          sed -i 's/applicationId "com.rb.unique123.retro_budget"/applicationId "com.rb.myretroapp123"/' android/app/build.gradle || true
-          perl -0777 -pe 's/applicationId "[^"]+"/applicationId "com.rb.myretroapp123"/' -i android/app/build.gradle || true
+          sed -i 's/applicationId .*$/applicationId "com.rb.myretroapp123"/' android/app/build.gradle || true
+          sed -i 's/minSdkVersion [0-9][0-9]*/minSdkVersion 21/' android/app/build.gradle || true
 
       - name: flutter pub get
         run: flutter pub get
 
-      # Створимо APK-и для кожної архітектури — обери arm64-v8a на телефоні
+      # Будуємо під кожну архітектуру
       - name: Build split APKs
         run: flutter build apk --debug --split-per-abi
 
