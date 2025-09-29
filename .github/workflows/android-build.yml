@@ -1,4 +1,4 @@
-name: Build Android APK (debug installable)
+name: Build Android APK (debug)
 on:
   workflow_dispatch:
 
@@ -47,7 +47,6 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      # Головне — збірка з розділенням по ABI, щоб точно підійшла під телефон
       - name: Build split APKs (debug)
         run: flutter build apk --debug --split-per-abi
 
