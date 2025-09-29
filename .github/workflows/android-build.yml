@@ -1,4 +1,4 @@
-name: Build Android APK (installable)
+name: Build signed release APK (installable)
 on:
   workflow_dispatch:
 
@@ -17,11 +17,13 @@ jobs:
         with:
           flutter-version: '3.24.0'
 
+      # 1) Створюємо проект
       - name: Create Flutter project
         run: |
-          flutter create . --platforms=android --project-name retro_budget --org com.rb.unique123 --overwrite
+          flutter create . --platforms=android --project-name retro_budget --org com.rb.auto --overwrite
 
-      - name: Inject minimal app
+      # 2) Додаємо мінімальний екран
+      - name: Inject app source
         run: |
           mkdir -p lib
           cat > lib/main.dart << 'EOF'
@@ -40,38 +42,45 @@ jobs:
                     primary: Color(0xFFC49A41), secondary: Color(0xFF557153),
                   ),
                 ),
-                home: const _Home();
-              );
-            }
-          }
-          class _Home extends StatelessWidget {
-            const _Home();
-            @override
-            Widget build(BuildContext context) {
-              return Scaffold(
-                appBar: AppBar(title: const Text('Розподіл коштів')),
-                body: const Center(child: Text('Баланс (демо)', style: TextStyle(fontSize: 22))),
-                floatingActionButton: FloatingActionButton.extended(
-                  onPressed: null, label: Text('Додати'), icon: Icon(Icons.add)),
+                home: Scaffold(
+                  appBar: AppBar(title: const Text('Розподіл коштів')),
+                  body: const Center(child: Text('Баланс (демо)', style: TextStyle(fontSize: 22))),
+                  floatingActionButton: FloatingActionButton.extended(
+                    onPressed: null, label: Text('Додати'), icon: Icon(Icons.add)),
+                ),
               );
             }
           }
           EOF
 
-      # ГАРАНТОВАНО унікальний package та сумісна minSdk
-      - name: Ensure unique applicationId and minSdk
+      # 3) Унікальний applicationId, щоб не конфліктував з чимось, що вже стояло
+      - name: Set unique applicationId
         run: |
-          sed -i 's/applicationId .*$/applicationId "com.rb.myretroapp123"/' android/app/build.gradle || true
-          sed -i 's/minSdkVersion [0-9][0-9]*/minSdkVersion 21/' android/app/build.gradle || true
+          sed -i 's/applicationId "[^"]*"/applicationId "com.rb.auto.retro_${{ github.run_id }}"/' android/app/build.gradle
+
+      # 4) Генеруємо тимчасовий release-кеystore і підписуємо APK
+      - name: Create keystore & config
+        run: |
+          keytool -genkey -v -keystore android/retro_tmp.jks -alias upload -keyalg RSA -keysize 2048 -validity 10000 -storepass 123456 -keypass 123456 -dname "CN=Retro,O=RB,C=UA"
+          cat > key.properties << 'EOF'
+          storeFile=android/retro_tmp.jks
+          storePassword=123456
+          keyAlias=upload
+          keyPassword=123456
+          EOF
+          # Додаємо конфіг підпису в build.gradle (якщо його нема)
+          if ! grep -q "keystoreProperties" android/app/build.gradle; then
+            awk '1; /android {/ {print "    def keystorePropertiesFile = rootProject.file(\"key.properties\")\n    def keystoreProperties = new Properties()\n    if (keystorePropertiesFile.exists()) keystoreProperties.load(new FileInputStream(keystorePropertiesFile))\n    signingConfigs { release { keyAlias keystoreProperties[\"keyAlias\"]; keyPassword keystoreProperties[\"keyPassword\"]; storeFile file(keystoreProperties[\"storeFile\"]); storePassword keystoreProperties[\"storePassword\"]; }}\n    buildTypes { release { signingConfig signingConfigs.release } }"; next }' android/app/build.gradle > tmp && mv tmp android/app/build.gradle
+          fi
 
       - name: flutter pub get
         run: flutter pub get
 
-      # Будуємо під кожну архітектуру
-      - name: Build split APKs
-        run: flutter build apk --debug --split-per-abi
+      # 5) Збираємо розділені APK під кожну архітектуру
+      - name: Build signed split APKs (release)
+        run: flutter build apk --release --split-per-abi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: retro_apk_split
+          name: retro_apk_release_split
           path: build/app/outputs/flutter-apk/*.apk
