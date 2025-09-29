@@ -21,37 +21,44 @@ jobs:
       - name: Create Flutter project in subdir
         run: flutter create app --platforms=android --project-name retrobudget --org com.rb.unique123 --overwrite
 
-      # 2) Підміняємо головний екран
+      # 2) Підміняємо головний екран (без зайвої крапки з комою!)
       - name: Inject demo main.dart
         run: |
           cat > app/lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
+
           void main() => runApp(const MyApp());
+
           class MyApp extends StatelessWidget {
             const MyApp({super.key});
+
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
                 debugShowCheckedModeBanner: false,
                 title: 'Retro Budget',
                 theme: ThemeData.dark(useMaterial3: true),
-                home: const _Home();
+                home: const _Home()
               );
             }
           }
+
           class _Home extends StatelessWidget {
             const _Home();
+
             @override
             Widget build(BuildContext context) {
               return Scaffold(
                 appBar: AppBar(title: const Text('Розподіл коштів')),
-                body: const Center(child: Text('Баланс (демо)', style: TextStyle(fontSize: 22))),
+                body: const Center(
+                  child: Text('Баланс (демо)', style: TextStyle(fontSize: 22)),
+                ),
               );
             }
           }
           EOF
 
-      # 3) Усі подальші команди — В СЕРЕДИНІ папки app/
+      # 3) Усі наступні команди — всередині папки app/
       - name: flutter pub get
         working-directory: app
         run: flutter pub get
