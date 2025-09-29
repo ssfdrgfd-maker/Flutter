@@ -1,4 +1,4 @@
-name: Build Android APK (debug)
+name: Build Android APK (debug, clean)
 on:
   workflow_dispatch:
 
@@ -7,19 +7,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: '17' }
+        with:
+          distribution: temurin
+          java-version: '17'
+
       - uses: subosito/flutter-action@v2
-        with: { flutter-version: '3.24.0' }
+        with:
+          flutter-version: '3.24.0'
 
-      - name: Create Flutter project
-        run: |
-          flutter create . --platforms=android --project-name retro_budget --org com.rb.unique --overwrite
+      # Створюємо ПОВНИЙ проект у підпапці app/
+      - name: Create Flutter project in subdir
+        run: flutter create app --platforms=android --project-name retrobudget --org com.rb.unique123 --overwrite
 
-      - name: Inject demo app
+      # Підміняємо головний екран
+      - name: Inject demo main.dart
         run: |
-          mkdir -p lib
-          cat > lib/main.dart << 'EOF'
+          cat > app/lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
           void main() => runApp(const MyApp());
           class MyApp extends StatelessWidget {
@@ -30,22 +35,33 @@ jobs:
                 debugShowCheckedModeBanner: false,
                 title: 'Retro Budget',
                 theme: ThemeData.dark(useMaterial3: true),
-                home: Scaffold(
-                  appBar: AppBar(title: const Text('Розподіл коштів')),
-                  body: const Center(child: Text('Баланс (демо)', style: TextStyle(fontSize: 22))),
-                ),
+                home: const _Home();
+              );
+            }
+          }
+          class _Home extends StatelessWidget {
+            const _Home();
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(title: const Text('Розподіл коштів')),
+                body: const Center(child: Text('Баланс (демо)', style: TextStyle(fontSize: 22))),
               );
             }
           }
           EOF
 
-      - run: flutter pub get
+      # Далі все робимо всередині підпапки app/
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
 
-      # УВАГА: debug і split-per-abi
       - name: Build split APKs (debug)
+        working-directory: app
         run: flutter build apk --debug --split-per-abi
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
         with:
           name: retro_apk_debug_split
-          path: build/app/outputs/flutter-apk/*.apk
+          path: app/build/app/outputs/flutter-apk/*.apk
