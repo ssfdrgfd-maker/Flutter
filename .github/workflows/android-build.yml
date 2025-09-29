@@ -1,10 +1,12 @@
 name: Build Android APK (debug, clean)
+
 on:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -17,11 +19,11 @@ jobs:
         with:
           flutter-version: '3.24.0'
 
-      # 1) Створюємо повний Flutter-проєкт у підпапці app/
+      # Створюємо проект у підпапці app/
       - name: Create Flutter project in subdir
         run: flutter create app --platforms=android --project-name retrobudget --org com.rb.unique123 --overwrite
 
-      # 2) Підміняємо головний екран (без зайвої крапки з комою!)
+      # Підміняємо головний екран (main.dart)
       - name: Inject demo main.dart
         run: |
           cat > app/lib/main.dart << 'EOF'
@@ -38,35 +40,40 @@ jobs:
                 debugShowCheckedModeBanner: false,
                 title: 'Retro Budget',
                 theme: ThemeData.dark(useMaterial3: true),
-                home: const _Home()
+                home: const HomePage(),
               );
             }
           }
 
-          class _Home extends StatelessWidget {
-            const _Home();
+          class HomePage extends StatelessWidget {
+            const HomePage({super.key});
 
             @override
             Widget build(BuildContext context) {
               return Scaffold(
                 appBar: AppBar(title: const Text('Розподіл коштів')),
                 body: const Center(
-                  child: Text('Баланс (демо)', style: TextStyle(fontSize: 22)),
+                  child: Text(
+                    'Баланс (демо)',
+                    style: TextStyle(fontSize: 22),
+                  ),
                 ),
               );
             }
           }
           EOF
 
-      # 3) Усі наступні команди — всередині папки app/
+      # Залежності
       - name: flutter pub get
         working-directory: app
         run: flutter pub get
 
+      # Збірка debug APK
       - name: Build split APKs (debug)
         working-directory: app
         run: flutter build apk --debug --split-per-abi
 
+      # Завантаження артефактів
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
