@@ -17,11 +17,11 @@ jobs:
         with:
           flutter-version: '3.24.0'
 
-      # Створюємо ПОВНИЙ проект у підпапці app/
+      # 1) Створюємо повний Flutter-проєкт у підпапці app/
       - name: Create Flutter project in subdir
         run: flutter create app --platforms=android --project-name retrobudget --org com.rb.unique123 --overwrite
 
-      # Підміняємо головний екран
+      # 2) Підміняємо головний екран
       - name: Inject demo main.dart
         run: |
           cat > app/lib/main.dart << 'EOF'
@@ -51,7 +51,7 @@ jobs:
           }
           EOF
 
-      # Далі все робимо всередині підпапки app/
+      # 3) Усі подальші команди — В СЕРЕДИНІ папки app/
       - name: flutter pub get
         working-directory: app
         run: flutter pub get
