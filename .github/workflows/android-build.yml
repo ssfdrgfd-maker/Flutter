@@ -6,6 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -22,7 +23,17 @@ jobs:
       - name: Create Flutter project in subdir
         run: flutter create app --platforms=android --project-name retrobudget --org com.rb.mvp --overwrite
 
-      # 2) Підміняємо pubspec.yaml (додаємо залежності)
+      # 2) Унікальний пакет, щоб гарантовано встановлювалось поруч зі старими версіями
+      - name: Set unique applicationId
+        run: |
+          sed -i 's/applicationId "[^"]*"/applicationId "com.rb.mvp.retrobudget.${{ github.run_id }}"/' app/android/app/build.gradle
+
+      # 3) Назва застосунку в лаунчері
+      - name: Set launcher label
+        run: |
+          sed -i 's/android:label="retrobudget"/android:label="Бюджет MVP"/' app/android/app/src/main/AndroidManifest.xml
+
+      # 4) pubspec з потрібними залежностями
       - name: Inject pubspec.yaml
         run: |
           cat > app/pubspec.yaml << 'EOF'
@@ -49,7 +60,7 @@ jobs:
             uses-material-design: true
           EOF
 
-      # 3) Підміняємо головне джерело з робочою логікою
+      # 5) Робочий main.dart (сітка категорій, додавання витрат, деталі)
       - name: Inject main.dart (MVP)
         run: |
           cat > app/lib/main.dart << 'EOF'
@@ -64,7 +75,7 @@ jobs:
           class Expense {
             final String id;
             final String categoryId;
-            final int epoch; // збережемо дату
+            final int epoch; // дата як мс з епохи
             final double amount;
             final String note;
             Expense({required this.id, required this.categoryId, required this.epoch, required this.amount, required this.note});
@@ -80,7 +91,6 @@ jobs:
             Category(this.id, this.name, this.icon);
           }
 
-          // Наші базові категорії (можна редагувати пізніше)
           final kCategories = <Category>[
             Category('food','Їжа', Icons.restaurant),
             Category('transport','Транспорт', Icons.directions_bus),
@@ -96,19 +106,16 @@ jobs:
           class Store {
             final SharedPreferences prefs;
             Store(this.prefs);
+            static Future<Store> open() async => Store(await SharedPreferences.getInstance());
 
             String _keyBudgets(String ym) => 'budgets_$ym';     // map categoryId -> planned
             String _keyExpenses(String ym) => 'expenses_$ym';   // list<Expense>
-
-            static Future<Store> open() async => Store(await SharedPreferences.getInstance());
-
             String currentYm() => DateFormat('yyyy-MM').format(DateTime.now());
 
             Map<String,double> loadBudgets(String ym){
               final raw = prefs.getString(_keyBudgets(ym));
               if(raw==null) return {};
-              final m = (jsonDecode(raw) as Map).map((k,v)=> MapEntry(k, (v as num).toDouble()));
-              return m;
+              return (jsonDecode(raw) as Map).map((k,v)=> MapEntry(k, (v as num).toDouble()));
             }
             Future<void> saveBudgets(String ym, Map<String,double> m) async {
               await prefs.setString(_keyBudgets(ym), jsonEncode(m));
@@ -117,8 +124,7 @@ jobs:
             List<Expense> loadExpenses(String ym){
               final raw = prefs.getString(_keyExpenses(ym));
               if(raw==null) return [];
-              final list = (jsonDecode(raw) as List).map((e)=>Expense.fromJson(e)).toList();
-              return list;
+              return (jsonDecode(raw) as List).map((e)=>Expense.fromJson(e)).toList();
             }
             Future<void> addExpense(String ym, Expense e) async {
               final list = loadExpenses(ym)..add(e);
@@ -136,7 +142,7 @@ jobs:
                 debugShowCheckedModeBanner: false,
                 theme: ThemeData.dark(useMaterial3: true).copyWith(
                   colorScheme: const ColorScheme.dark(
-                    primary: Color(0xFFC49A41), // ретро-гірчичний
+                    primary: Color(0xFFC49A41),
                     secondary: Color(0xFF88A37F),
                   ),
                   scaffoldBackgroundColor: const Color(0xFF0F1E17),
@@ -159,20 +165,14 @@ jobs:
             List<Expense> expenses = [];
 
             @override
-            void initState() {
-              super.initState();
-              _init();
-            }
-
+            void initState() { super.initState(); _init(); }
             Future<void> _init() async {
               final s = await Store.open();
               final m = s.currentYm();
               setState((){ store = s; ym = m; budgets = s.loadBudgets(m); expenses = s.loadExpenses(m); });
             }
 
-            double spentFor(String catId){
-              return expenses.where((e)=>e.categoryId==catId).fold(0.0,(a,b)=>a+b.amount);
-            }
+            double spentFor(String catId) => expenses.where((e)=>e.categoryId==catId).fold(0.0,(a,b)=>a+b.amount);
 
             void _openAddExpense([String? catId]){
               if(store==null) return;
@@ -223,9 +223,7 @@ jobs:
 
             @override
             Widget build(BuildContext context) {
-              if(store==null) {
-                return const Scaffold(body: Center(child: CircularProgressIndicator()));
-              }
+              if(store==null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
               return Scaffold(
                 appBar: AppBar(title: const Text('Розподіл коштів')),
                 body: GridView.count(
@@ -240,12 +238,8 @@ jobs:
                         spent: spentFor(c.id),
                         onTap: (){
                           Navigator.push(context, MaterialPageRoute(
-                            builder: (_)=> CategoryDetails(
-                              category: c,
-                              ym: ym,
-                              store: store!,
-                            ),
-                          )).then((_) {
+                            builder: (_)=> CategoryDetails(category: c, ym: ym, store: store!),
+                          )).then((_){
                             setState((){
                               budgets = store!.loadBudgets(ym);
                               expenses = store!.loadExpenses(ym);
@@ -274,7 +268,6 @@ jobs:
             final VoidCallback onLongPress;
             final VoidCallback onAdd;
             const _CategoryCard({super.key, required this.category, required this.planned, required this.spent, required this.onTap, required this.onLongPress, required this.onAdd});
-
             @override
             Widget build(BuildContext context) {
               final percent = planned>0 ? (spent/planned).clamp(0.0, 1.0) : 0.0;
@@ -429,10 +422,7 @@ jobs:
             DateTime date = DateTime.now();
 
             @override
-            void initState() {
-              super.initState();
-              catId = widget.initialCategoryId;
-            }
+            void initState() { super.initState(); catId = widget.initialCategoryId; }
 
             @override
             Widget build(BuildContext context) {
@@ -474,4 +464,56 @@ jobs:
                     Row(
                       children: [
                         Text(DateFormat('dd.MM.yyyy').format(date)),
-                  
+                        const Spacer(),
+                        TextButton.icon(
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: date,
+                              firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                              lastDate: DateTime.now().add(const Duration(days: 365)),
+                            );
+                            if(picked!=null) setState(()=>date=picked);
+                          },
+                          icon: const Icon(Icons.event),
+                          label: const Text('Змінити дату'),
+                        )
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: (){
+                          final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.')) ?? 0;
+                          if(amount<=0){ Navigator.pop(context); return; }
+                          widget.onSave(catId, amount, noteCtrl.text.trim(), date);
+                          Navigator.pop(context);
+                        },
+                        icon: const Icon(Icons.check),
+                        label: const Text('Зберегти'),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+          EOF
+
+      # 6) Залежності
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      # 7) Збірка debug-APK зі сплітами
+      - name: Build split APKs (debug)
+        working-directory: app
+        run: flutter build apk --debug --split-per-abi
+
+      # 8) Завантаження артефактів
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: retro_apk_debug_split
+          path: app/build/app/outputs/flutter-apk/*.apk
