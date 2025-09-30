@@ -1,4 +1,4 @@
-name: Build Android APK (release, signed)
+name: Build Android APK (debug, MVP)
 
 on:
   workflow_dispatch:
@@ -18,111 +18,512 @@ jobs:
         with:
           flutter-version: '3.24.0'
 
-      # 1) Створюємо проєкт у підпапці app/
-      - name: Create Flutter project
-        run: flutter create app --platforms=android --project-name retrobudget --org com.rb.release --overwrite
+      # 1) Створюємо проект у підпапці app/
+      - name: Create Flutter project in subdir
+        run: flutter create app --platforms=android --project-name retrobudget --org com.rb.mvp --overwrite
 
-      # 2) Підміняємо головний екран
-      - name: Inject main.dart
+      # 2) Підміняємо pubspec.yaml (додаємо залежності)
+      - name: Inject pubspec.yaml
+        run: |
+          cat > app/pubspec.yaml << 'EOF'
+          name: retrobudget
+          description: MVP бюджету з локальним збереженням
+          publish_to: "none"
+          version: 0.1.0+1
+          environment:
+            sdk: ">=3.4.0 <4.0.0"
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            shared_preferences: ^2.2.2
+            intl: ^0.19.0
+            cupertino_icons: ^1.0.6
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^4.0.0
+
+          flutter:
+            uses-material-design: true
+          EOF
+
+      # 3) Підміняємо головне джерело з робочою логікою
+      - name: Inject main.dart (MVP)
         run: |
           cat > app/lib/main.dart << 'EOF'
+          import 'dart:convert';
           import 'package:flutter/material.dart';
+          import 'package:intl/intl.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
 
-          void main() => runApp(const MyApp());
+          void main() => runApp(const BudgetApp());
 
-          class MyApp extends StatelessWidget {
-            const MyApp({super.key});
+          // ====== Моделі ======
+          class Expense {
+            final String id;
+            final String categoryId;
+            final int epoch; // збережемо дату
+            final double amount;
+            final String note;
+            Expense({required this.id, required this.categoryId, required this.epoch, required this.amount, required this.note});
+            Map<String, dynamic> toJson() => {'id': id,'categoryId': categoryId,'epoch': epoch,'amount': amount,'note': note};
+            static Expense fromJson(Map<String, dynamic> j) => Expense(
+              id: j['id'], categoryId: j['categoryId'], epoch: j['epoch'], amount: (j['amount'] as num).toDouble(), note: j['note'] ?? '');
+          }
 
+          class Category {
+            final String id;
+            final String name;
+            final IconData icon;
+            Category(this.id, this.name, this.icon);
+          }
+
+          // Наші базові категорії (можна редагувати пізніше)
+          final kCategories = <Category>[
+            Category('food','Їжа', Icons.restaurant),
+            Category('transport','Транспорт', Icons.directions_bus),
+            Category('home','Житло', Icons.home),
+            Category('health','Здоровʼя', Icons.local_hospital),
+            Category('fun','Дозвілля', Icons.local_bar),
+            Category('sport','Спорт', Icons.fitness_center),
+            Category('auto','Авто', Icons.directions_car),
+            Category('other','Інше', Icons.category),
+          ];
+
+          // ====== Сховище ======
+          class Store {
+            final SharedPreferences prefs;
+            Store(this.prefs);
+
+            String _keyBudgets(String ym) => 'budgets_$ym';     // map categoryId -> planned
+            String _keyExpenses(String ym) => 'expenses_$ym';   // list<Expense>
+
+            static Future<Store> open() async => Store(await SharedPreferences.getInstance());
+
+            String currentYm() => DateFormat('yyyy-MM').format(DateTime.now());
+
+            Map<String,double> loadBudgets(String ym){
+              final raw = prefs.getString(_keyBudgets(ym));
+              if(raw==null) return {};
+              final m = (jsonDecode(raw) as Map).map((k,v)=> MapEntry(k, (v as num).toDouble()));
+              return m;
+            }
+            Future<void> saveBudgets(String ym, Map<String,double> m) async {
+              await prefs.setString(_keyBudgets(ym), jsonEncode(m));
+            }
+
+            List<Expense> loadExpenses(String ym){
+              final raw = prefs.getString(_keyExpenses(ym));
+              if(raw==null) return [];
+              final list = (jsonDecode(raw) as List).map((e)=>Expense.fromJson(e)).toList();
+              return list;
+            }
+            Future<void> addExpense(String ym, Expense e) async {
+              final list = loadExpenses(ym)..add(e);
+              await prefs.setString(_keyExpenses(ym), jsonEncode(list.map((e)=>e.toJson()).toList()));
+            }
+          }
+
+          // ====== Додаток ======
+          class BudgetApp extends StatelessWidget {
+            const BudgetApp({super.key});
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
+                title: 'Бюджет',
                 debugShowCheckedModeBanner: false,
-                title: 'Retro Budget',
-                theme: ThemeData.dark(useMaterial3: true),
-                home: const HomePage(),
+                theme: ThemeData.dark(useMaterial3: true).copyWith(
+                  colorScheme: const ColorScheme.dark(
+                    primary: Color(0xFFC49A41), // ретро-гірчичний
+                    secondary: Color(0xFF88A37F),
+                  ),
+                  scaffoldBackgroundColor: const Color(0xFF0F1E17),
+                ),
+                home: const HomeScreen(),
               );
             }
           }
 
-          class HomePage extends StatelessWidget {
-            const HomePage({super.key});
+          class HomeScreen extends StatefulWidget {
+            const HomeScreen({super.key});
+            @override
+            State<HomeScreen> createState() => _HomeScreenState();
+          }
+
+          class _HomeScreenState extends State<HomeScreen> {
+            Store? store;
+            String ym = '';
+            Map<String,double> budgets = {};
+            List<Expense> expenses = [];
+
+            @override
+            void initState() {
+              super.initState();
+              _init();
+            }
+
+            Future<void> _init() async {
+              final s = await Store.open();
+              final m = s.currentYm();
+              setState((){ store = s; ym = m; budgets = s.loadBudgets(m); expenses = s.loadExpenses(m); });
+            }
+
+            double spentFor(String catId){
+              return expenses.where((e)=>e.categoryId==catId).fold(0.0,(a,b)=>a+b.amount);
+            }
+
+            void _openAddExpense([String? catId]){
+              if(store==null) return;
+              showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                builder: (ctx)=> AddExpenseSheet(
+                  initialCategoryId: catId ?? 'food',
+                  onSave: (categoryId, amount, note, date){
+                    final e = Expense(
+                      id: DateTime.now().microsecondsSinceEpoch.toString(),
+                      categoryId: categoryId,
+                      epoch: date.millisecondsSinceEpoch,
+                      amount: amount,
+                      note: note,
+                    );
+                    store!.addExpense(ym, e).then((_){
+                      setState((){ expenses = store!.loadExpenses(ym); });
+                    });
+                  },
+                ),
+              );
+            }
+
+            void _openSetBudget(String catId){
+              final controller = TextEditingController(text: (budgets[catId] ?? 0).toStringAsFixed(0));
+              showDialog(context: context, builder: (ctx){
+                return AlertDialog(
+                  title: const Text('Запланувати суму'),
+                  content: TextField(
+                    controller: controller,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(prefixText: '₴ ', hintText: 'Сума на місяць'),
+                  ),
+                  actions: [
+                    TextButton(onPressed: ()=>Navigator.pop(ctx), child: const Text('Скасувати')),
+                    FilledButton(onPressed: (){
+                      final v = double.tryParse(controller.text.replaceAll(',', '.')) ?? 0;
+                      budgets[catId] = v;
+                      store!.saveBudgets(ym, budgets);
+                      setState((){});
+                      Navigator.pop(ctx);
+                    }, child: const Text('Зберегти')),
+                  ],
+                );
+              });
+            }
 
             @override
             Widget build(BuildContext context) {
+              if(store==null) {
+                return const Scaffold(body: Center(child: CircularProgressIndicator()));
+              }
               return Scaffold(
                 appBar: AppBar(title: const Text('Розподіл коштів')),
-                body: const Center(
-                  child: Text('Баланс (демо)', style: TextStyle(fontSize: 22)),
+                body: GridView.count(
+                  padding: const EdgeInsets.all(16),
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 12, crossAxisSpacing: 12,
+                  children: [
+                    for(final c in kCategories)
+                      _CategoryCard(
+                        category: c,
+                        planned: budgets[c.id] ?? 0,
+                        spent: spentFor(c.id),
+                        onTap: (){
+                          Navigator.push(context, MaterialPageRoute(
+                            builder: (_)=> CategoryDetails(
+                              category: c,
+                              ym: ym,
+                              store: store!,
+                            ),
+                          )).then((_) {
+                            setState((){
+                              budgets = store!.loadBudgets(ym);
+                              expenses = store!.loadExpenses(ym);
+                            });
+                          });
+                        },
+                        onLongPress: ()=>_openSetBudget(c.id),
+                        onAdd: ()=>_openAddExpense(c.id),
+                      ),
+                  ],
+                ),
+                floatingActionButton: FloatingActionButton.extended(
+                  onPressed: _openAddExpense,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Додати'),
+                ),
+              );
+            }
+          }
+
+          class _CategoryCard extends StatelessWidget {
+            final Category category;
+            final double planned;
+            final double spent;
+            final VoidCallback onTap;
+            final VoidCallback onLongPress;
+            final VoidCallback onAdd;
+            const _CategoryCard({super.key, required this.category, required this.planned, required this.spent, required this.onTap, required this.onLongPress, required this.onAdd});
+
+            @override
+            Widget build(BuildContext context) {
+              final percent = planned>0 ? (spent/planned).clamp(0.0, 1.0) : 0.0;
+              final percentText = planned>0 ? '${(percent*100).toStringAsFixed(0)}%' : '0%';
+              final remain = (planned - spent);
+              return GestureDetector(
+                onTap: onTap,
+                onLongPress: onLongPress,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF15251C),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.black26),
+                  ),
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(category.icon, size: 28, color: Theme.of(context).colorScheme.primary),
+                          const Spacer(),
+                          IconButton(onPressed: onAdd, icon: const Icon(Icons.add_circle_outline))
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(category.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                      const Spacer(),
+                      LinearProgressIndicator(value: planned>0? (spent/planned).clamp(0,1):0, minHeight: 8),
+                      const SizedBox(height: 8),
+                      Text('Заплановано: ₴${planned.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12)),
+                      Text('Витрачено: ₴${spent.toStringAsFixed(0)}  (${percentText})', style: const TextStyle(fontSize: 12)),
+                      Text('Залишок: ₴${remain.toStringAsFixed(0)}', style: const TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ),
+              );
+            }
+          }
+
+          // ====== Деталі категорії ======
+          class CategoryDetails extends StatefulWidget {
+            final Category category;
+            final String ym;
+            final Store store;
+            const CategoryDetails({super.key, required this.category, required this.ym, required this.store});
+            @override
+            State<CategoryDetails> createState() => _CategoryDetailsState();
+          }
+
+          class _CategoryDetailsState extends State<CategoryDetails> {
+            late Map<String,double> budgets;
+            late List<Expense> expenses;
+
+            @override
+            void initState() {
+              super.initState();
+              budgets = widget.store.loadBudgets(widget.ym);
+              expenses = widget.store.loadExpenses(widget.ym)
+                .where((e)=>e.categoryId==widget.category.id).toList()
+                ..sort((a,b)=> b.epoch.compareTo(a.epoch));
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final planned = budgets[widget.category.id] ?? 0;
+              final spent = expenses.fold<double>(0,(a,b)=>a+b.amount);
+              final remain = planned - spent;
+              return Scaffold(
+                appBar: AppBar(title: Text(widget.category.name)),
+                body: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          _kv('Заплановано', '₴${planned.toStringAsFixed(0)}'),
+                          _kv('Витрачено', '₴${spent.toStringAsFixed(0)}'),
+                          _kv('Залишок', '₴${remain.toStringAsFixed(0)}'),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 0),
+                    Expanded(
+                      child: expenses.isEmpty
+                        ? const Center(child: Text('Поки що без витрат'))
+                        : ListView.builder(
+                            itemCount: expenses.length,
+                            itemBuilder: (_, i){
+                              final e = expenses[i];
+                              final dt = DateFormat('dd.MM.yyyy').format(DateTime.fromMillisecondsSinceEpoch(e.epoch));
+                              return ListTile(
+                                leading: const Icon(Icons.receipt_long),
+                                title: Text('₴${e.amount.toStringAsFixed(2)}'),
+                                subtitle: Text('${e.note.isEmpty ? 'Без примітки' : e.note} · $dt'),
+                              );
+                            },
+                          ),
+                    )
+                  ],
+                ),
+                floatingActionButton: FloatingActionButton.extended(
+                  onPressed: (){
+                    showModalBottomSheet(context: context, isScrollControlled: true, builder: (_){
+                      return AddExpenseSheet(
+                        initialCategoryId: widget.category.id,
+                        onSave: (cat, amount, note, date) async {
+                          final e = Expense(
+                            id: DateTime.now().microsecondsSinceEpoch.toString(),
+                            categoryId: cat,
+                            amount: amount,
+                            note: note,
+                            epoch: date.millisecondsSinceEpoch,
+                          );
+                          await widget.store.addExpense(widget.ym, e);
+                          setState((){
+                            expenses.insert(0, e);
+                          });
+                        },
+                      );
+                    });
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Додати витрату'),
+                ),
+              );
+            }
+
+            Widget _kv(String k, String v){
+              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(k, style: const TextStyle(fontSize: 12, color: Colors.white70)),
+                const SizedBox(height: 2),
+                Text(v, style: const TextStyle(fontWeight: FontWeight.w600)),
+              ]);
+            }
+          }
+
+          // ====== Форма додавання ======
+          class AddExpenseSheet extends StatefulWidget {
+            final String initialCategoryId;
+            final void Function(String categoryId, double amount, String note, DateTime date) onSave;
+            const AddExpenseSheet({super.key, required this.initialCategoryId, required this.onSave});
+            @override
+            State<AddExpenseSheet> createState() => _AddExpenseSheetState();
+          }
+
+          class _AddExpenseSheetState extends State<AddExpenseSheet> {
+            late String catId;
+            final amountCtrl = TextEditingController();
+            final noteCtrl = TextEditingController();
+            DateTime date = DateTime.now();
+
+            @override
+            void initState() {
+              super.initState();
+              catId = widget.initialCategoryId;
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final bottom = MediaQuery.of(context).viewInsets.bottom;
+              return Padding(
+                padding: EdgeInsets.only(left:16,right:16,bottom: bottom+16, top:16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        const Text('Нова витрата', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                        const Spacer(),
+                        IconButton(onPressed: ()=>Navigator.pop(context), icon: const Icon(Icons.close)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      value: catId,
+                      items: [
+                        for(final c in kCategories)
+                          DropdownMenuItem(value: c.id, child: Row(children:[Icon(c.icon), const SizedBox(width:8), Text(c.name)])),
+                      ],
+                      onChanged: (v){ if(v!=null) setState(()=>catId=v); },
+                      decoration: const InputDecoration(labelText: 'Категорія'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: amountCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Сума, ₴'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: noteCtrl,
+                      decoration: const InputDecoration(labelText: 'Примітка (необовʼязково)'),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Text(DateFormat('dd.MM.yyyy').format(date)),
+                        const Spacer(),
+                        TextButton.icon(
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: date,
+                              firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                              lastDate: DateTime.now().add(const Duration(days: 365)),
+                            );
+                            if(picked!=null) setState(()=>date=picked);
+                          },
+                          icon: const Icon(Icons.event),
+                          label: const Text('Змінити дату'),
+                        )
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: (){
+                          final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.')) ?? 0;
+                          if(amount<=0){ Navigator.pop(context); return; }
+                          widget.onSave(catId, amount, noteCtrl.text.trim(), date);
+                          Navigator.pop(context);
+                        },
+                        icon: const Icon(Icons.check),
+                        label: const Text('Зберегти'),
+                      ),
+                    ),
+                  ],
                 ),
               );
             }
           }
           EOF
 
-      # 3) Унікальний applicationId (щоб точно встановилося)
-      - name: Set unique applicationId
-        run: |
-          sed -i 's/applicationId "[^"]*"/applicationId "com.rb.retro.${{ github.run_id }}"/' app/android/app/build.gradle || true
-          # якщо рядка не було — додамо
-          if ! grep -q 'applicationId "' app/android/app/build.gradle; then
-            perl -0777 -pe 's/(defaultConfig\s*{)/$1\n        applicationId "com.rb.retro.'${{ github.run_id }}'"/' -i app/android/app/build.gradle
-          fi
-
-      # 4) Генеруємо тимчасовий релізний keystore + підключаємо в Gradle
-      - name: Create keystore & wire Gradle signing
-        run: |
-          keytool -genkey -v -keystore app/android/retro_tmp.jks -alias upload \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass 123456 -keypass 123456 \
-            -dname "CN=RetroBudget,O=RB,C=UA"
-
-          cat > app/android/key.properties << 'KP'
-          storeFile=app/android/retro_tmp.jks
-          storePassword=123456
-          keyAlias=upload
-          keyPassword=123456
-          KP
-
-          # Інжектимо блок підпису до app/android/app/build.gradle, якщо його немає
-          if ! grep -q 'keystorePropertiesFile' app/android/app/build.gradle; then
-            awk '1; /android \{/ && !done { 
-              print "    def keystorePropertiesFile = rootProject.file(\"android/key.properties\")";
-              print "    def keystoreProperties = new Properties()";
-              print "    if (keystorePropertiesFile.exists()) { keystoreProperties.load(new FileInputStream(keystorePropertiesFile)) }";
-              print "    signingConfigs {";
-              print "        release {";
-              print "            keyAlias keystoreProperties[\"keyAlias\"]";
-              print "            keyPassword keystoreProperties[\"keyPassword\"]";
-              print "            storeFile file(keystoreProperties[\"storeFile\"])";
-              print "            storePassword keystoreProperties[\"storePassword\"]";
-              print "        }";
-              print "    }";
-              print "    buildTypes {";
-              print "        release { signingConfig signingConfigs.release }";
-              print "    }";
-              done=1 
-            }' app/android/app/build.gradle > app/android/app/build.gradle.tmp && mv app/android/app/build.gradle.tmp app/android/app/build.gradle
-          fi
-
-      # 5) Далі працюємо в app/
+      # 4) Залежності
       - name: flutter pub get
         working-directory: app
         run: flutter pub get
 
-      # 6) Release збірка: окремі APK під кожну ABI
-      - name: Build signed split APKs (release)
+      # 5) Збірка debug-APK зі сплітами
+      - name: Build split APKs (debug)
         working-directory: app
-        run: flutter build apk --release --split-per-abi
+        run: flutter build apk --debug --split-per-abi
 
-      # (необов’язково) універсальний єдиний APK
-      - name: Build universal APK (release)
-        working-directory: app
-        run: flutter build apk --release
-
-      # 7) Завантажуємо артефакти
-      - name: Upload release APKs
+      # 6) Завантажуємо артефакти
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: retro_apk_release
-          path: |
-            app/build/app/outputs/flutter-apk/app-*-release.apk
+          name: retro_apk_debug_split
+          path: app/build/app/outputs/flutter-apk/*.apk
