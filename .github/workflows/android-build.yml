@@ -1,4 +1,4 @@
-name: Build Android APK (debug, clean)
+name: Build Android APK (release, signed)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -19,12 +18,12 @@ jobs:
         with:
           flutter-version: '3.24.0'
 
-      # Створюємо проект у підпапці app/
-      - name: Create Flutter project in subdir
-        run: flutter create app --platforms=android --project-name retrobudget --org com.rb.unique123 --overwrite
+      # 1) Створюємо проєкт у підпапці app/
+      - name: Create Flutter project
+        run: flutter create app --platforms=android --project-name retrobudget --org com.rb.release --overwrite
 
-      # Підміняємо головний екран (main.dart)
-      - name: Inject demo main.dart
+      # 2) Підміняємо головний екран
+      - name: Inject main.dart
         run: |
           cat > app/lib/main.dart << 'EOF'
           import 'package:flutter/material.dart';
@@ -53,29 +52,77 @@ jobs:
               return Scaffold(
                 appBar: AppBar(title: const Text('Розподіл коштів')),
                 body: const Center(
-                  child: Text(
-                    'Баланс (демо)',
-                    style: TextStyle(fontSize: 22),
-                  ),
+                  child: Text('Баланс (демо)', style: TextStyle(fontSize: 22)),
                 ),
               );
             }
           }
           EOF
 
-      # Залежності
+      # 3) Унікальний applicationId (щоб точно встановилося)
+      - name: Set unique applicationId
+        run: |
+          sed -i 's/applicationId "[^"]*"/applicationId "com.rb.retro.${{ github.run_id }}"/' app/android/app/build.gradle || true
+          # якщо рядка не було — додамо
+          if ! grep -q 'applicationId "' app/android/app/build.gradle; then
+            perl -0777 -pe 's/(defaultConfig\s*{)/$1\n        applicationId "com.rb.retro.'${{ github.run_id }}'"/' -i app/android/app/build.gradle
+          fi
+
+      # 4) Генеруємо тимчасовий релізний keystore + підключаємо в Gradle
+      - name: Create keystore & wire Gradle signing
+        run: |
+          keytool -genkey -v -keystore app/android/retro_tmp.jks -alias upload \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass 123456 -keypass 123456 \
+            -dname "CN=RetroBudget,O=RB,C=UA"
+
+          cat > app/android/key.properties << 'KP'
+          storeFile=app/android/retro_tmp.jks
+          storePassword=123456
+          keyAlias=upload
+          keyPassword=123456
+          KP
+
+          # Інжектимо блок підпису до app/android/app/build.gradle, якщо його немає
+          if ! grep -q 'keystorePropertiesFile' app/android/app/build.gradle; then
+            awk '1; /android \{/ && !done { 
+              print "    def keystorePropertiesFile = rootProject.file(\"android/key.properties\")";
+              print "    def keystoreProperties = new Properties()";
+              print "    if (keystorePropertiesFile.exists()) { keystoreProperties.load(new FileInputStream(keystorePropertiesFile)) }";
+              print "    signingConfigs {";
+              print "        release {";
+              print "            keyAlias keystoreProperties[\"keyAlias\"]";
+              print "            keyPassword keystoreProperties[\"keyPassword\"]";
+              print "            storeFile file(keystoreProperties[\"storeFile\"])";
+              print "            storePassword keystoreProperties[\"storePassword\"]";
+              print "        }";
+              print "    }";
+              print "    buildTypes {";
+              print "        release { signingConfig signingConfigs.release }";
+              print "    }";
+              done=1 
+            }' app/android/app/build.gradle > app/android/app/build.gradle.tmp && mv app/android/app/build.gradle.tmp app/android/app/build.gradle
+          fi
+
+      # 5) Далі працюємо в app/
       - name: flutter pub get
         working-directory: app
         run: flutter pub get
 
-      # Збірка debug APK
-      - name: Build split APKs (debug)
+      # 6) Release збірка: окремі APK під кожну ABI
+      - name: Build signed split APKs (release)
         working-directory: app
-        run: flutter build apk --debug --split-per-abi
+        run: flutter build apk --release --split-per-abi
 
-      # Завантаження артефактів
-      - name: Upload APKs
+      # (необов’язково) універсальний єдиний APK
+      - name: Build universal APK (release)
+        working-directory: app
+        run: flutter build apk --release
+
+      # 7) Завантажуємо артефакти
+      - name: Upload release APKs
         uses: actions/upload-artifact@v4
         with:
-          name: retro_apk_debug_split
-          path: app/build/app/outputs/flutter-apk/*.apk
+          name: retro_apk_release
+          path: |
+            app/build/app/outputs/flutter-apk/app-*-release.apk
