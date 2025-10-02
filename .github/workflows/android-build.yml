@@ -1,0 +1,198 @@
+name: Build Android APK (debug, MVP)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+
+      # Створюємо чистий Flutter-проєкт у підпапці app/
+      - name: Create Flutter project
+        run: flutter create app --platforms=android --project-name retrobudget --org com.rb.unique123 --overwrite
+
+      # Підміняємо lib/main.dart на наш робочий з логікою витрат
+      - name: Inject working main.dart
+        run: |
+          cat > app/lib/main.dart << 'EOF'
+          import 'package:flutter/material.dart';
+
+          void main() => runApp(const RetroBudgetApp());
+
+          class RetroBudgetApp extends StatelessWidget {
+            const RetroBudgetApp({super.key});
+            @override
+            Widget build(BuildContext context) {
+              final base = ThemeData.dark(useMaterial3: true);
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                title: 'Ретро-бюджет',
+                theme: base.copyWith(
+                  scaffoldBackgroundColor: const Color(0xFF0F1E17),
+                  colorScheme: base.colorScheme.copyWith(
+                    primary: const Color(0xFFFFC94A),
+                    secondary: const Color(0xFFFB8C0A),
+                  ),
+                  appBarTheme: base.appBarTheme.copyWith(
+                    backgroundColor: Colors.black,
+                    foregroundColor: Colors.white,
+                    titleTextStyle: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 24,
+                      color: Colors.white,
+                    ),
+                  ),
+                  floatingActionButtonTheme: const FloatingActionButtonThemeData(
+                    backgroundColor: Color(0xFFFFC94A),
+                    foregroundColor: Colors.black,
+                  ),
+                  snackBarTheme: const SnackBarThemeData(
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                ),
+                home: const HomePage(),
+              );
+            }
+          }
+
+          class Expense {
+            final String title;
+            final double amount;
+            final DateTime createdAt;
+            Expense(this.title, this.amount) : createdAt = DateTime.now();
+          }
+
+          class HomePage extends StatefulWidget {
+            const HomePage({super.key});
+            @override
+            State<HomePage> createState() => _HomePageState();
+          }
+
+          class _HomePageState extends State<HomePage> {
+            final _items = <Expense>[
+              Expense('Кава', 65),
+              Expense('Метро', 12),
+            ];
+
+            void _openAddSheet() {
+              final titleCtrl = TextEditingController();
+              final amountCtrl = TextEditingController();
+
+              showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                builder: (ctx) {
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      left: 16, right: 16, top: 16,
+                      bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Text('Новий витрата', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: titleCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Назва',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: amountCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Сума',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        FilledButton(
+                          onPressed: () {
+                            final title = titleCtrl.text.trim();
+                            final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.')) ?? 0;
+                            if (title.isEmpty || amount <= 0) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Введи коректну назву і суму')),
+                              );
+                              return;
+                            }
+                            setState(() => _items.insert(0, Expense(title, amount)));
+                            Navigator.of(ctx).pop();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Додано: $title — ${amount.toStringAsFixed(2)} ₴')),
+                            );
+                          },
+                          child: const Text('Додати'),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                    ),
+                  );
+                },
+              );
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(title: const Text('Розподіл коштів')),
+                floatingActionButton: FloatingActionButton.extended(
+                  onPressed: _openAddSheet,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Додати'),
+                ),
+                body: _items.isEmpty
+                    ? const Center(child: Text('Поки що немає витрат', style: TextStyle(fontSize: 18)))
+                    : ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+                        itemCount: _items.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (context, i) {
+                          final e = _items[i];
+                          return ListTile(
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            tileColor: const Color(0xFF13261E),
+                            title: Text(e.title, style: const TextStyle(fontWeight: FontWeight.w600)),
+                            subtitle: Text('${e.createdAt.hour.toString().padLeft(2,'0')}:${e.createdAt.minute.toString().padLeft(2,'0')}'),
+                            trailing: Text('${e.amount.toStringAsFixed(2)} ₴',
+                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                          );
+                        },
+                      ),
+              );
+            }
+          }
+          EOF
+
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: Build debug APK (split)
+        working-directory: app
+        run: flutter build apk --debug --split-per-abi
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: retro_apk_debug_split
+          path: app/build/app/outputs/flutter-apk/*.apk
