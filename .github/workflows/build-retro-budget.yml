@@ -1,0 +1,342 @@
+name: Build Retro Budget (debug, MVP)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+
+      - name: Create Flutter project
+        run: flutter create app --platforms=android --project-name retrobudget --org com.rb.mvp --overwrite
+
+      - name: Add dependencies
+        working-directory: app
+        run: |
+          flutter pub add shared_preferences
+          flutter pub add intl
+          flutter pub add fl_chart
+          flutter pub add image_picker
+
+      - name: Inject main.dart
+        run: |
+          cat > app/lib/main.dart << 'EOF'
+          // ==== Retro Budget MVP ====
+          import 'dart:convert';
+          import 'dart:io';
+          import 'package:flutter/material.dart';
+          import 'package:intl/intl.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
+          import 'package:fl_chart/fl_chart.dart';
+          import 'package:image_picker/image_picker.dart';
+
+          void main() => runApp(const RetroBudgetApp());
+
+          class RetroBudgetApp extends StatelessWidget {
+            const RetroBudgetApp({super.key});
+            @override
+            Widget build(BuildContext context) {
+              final base = ThemeData.dark(useMaterial3: true);
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                title: '💸 Retro Budget MVP',
+                theme: base.copyWith(
+                  scaffoldBackgroundColor: const Color(0xFF0F1E17),
+                  colorScheme: base.colorScheme.copyWith(
+                    primary: const Color(0xFFFFC94A),
+                  ),
+                  appBarTheme: base.appBarTheme.copyWith(
+                    backgroundColor: Colors.black,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+                home: const HomePage(),
+              );
+            }
+          }
+
+          // === Модель транзакції ===
+          enum TxType { expense, income }
+
+          class TxItem {
+            final String id;
+            final String category;
+            final String note;
+            final double amount;
+            final DateTime date;
+            final TxType type;
+            final String? imagePath;
+
+            TxItem({
+              required this.id,
+              required this.category,
+              required this.note,
+              required this.amount,
+              required this.date,
+              required this.type,
+              this.imagePath,
+            });
+
+            Map<String, dynamic> toJson() => {
+              'id': id,
+              'category': category,
+              'note': note,
+              'amount': amount,
+              'date': date.toIso8601String(),
+              'type': type.name,
+              'imagePath': imagePath,
+            };
+
+            factory TxItem.fromJson(Map<String, dynamic> m) => TxItem(
+              id: m['id'],
+              category: m['category'],
+              note: m['note'],
+              amount: (m['amount'] as num).toDouble(),
+              date: DateTime.parse(m['date']),
+              type: m['type'] == 'income' ? TxType.income : TxType.expense,
+              imagePath: m['imagePath'],
+            );
+          }
+
+          class TxStore {
+            static const _key = 'retro_budget_tx';
+
+            static Future<List<TxItem>> load() async {
+              final sp = await SharedPreferences.getInstance();
+              final raw = sp.getString(_key);
+              if (raw == null) return [];
+              final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+              return list.map(TxItem.fromJson).toList();
+            }
+
+            static Future<void> save(List<TxItem> items) async {
+              final sp = await SharedPreferences.getInstance();
+              final raw = jsonEncode(items.map((e) => e.toJson()).toList());
+              await sp.setString(_key, raw);
+            }
+          }
+
+          // === Головний екран ===
+          class HomePage extends StatefulWidget {
+            const HomePage({super.key});
+            @override
+            State<HomePage> createState() => _HomePageState();
+          }
+
+          class _HomePageState extends State<HomePage> {
+            List<TxItem> _items = [];
+            bool _loading = true;
+            final _categories = ['Їжа','Транспорт','Комуналка','Одяг','Розваги','Спорт','Інше'];
+
+            @override
+            void initState() {
+              super.initState();
+              _load();
+            }
+
+            Future<void> _load() async {
+              final data = await TxStore.load();
+              setState(() {
+                _items = data;
+                _loading = false;
+              });
+            }
+
+            Future<void> _addTx(TxItem tx) async {
+              setState(() => _items.insert(0, tx));
+              await TxStore.save(_items);
+            }
+
+            Future<void> _removeTx(String id) async {
+              setState(() => _items.removeWhere((e) => e.id == id));
+              await TxStore.save(_items);
+            }
+
+            double get _balance {
+              return _items.fold(0, (s, e) => s + (e.type==TxType.income ? e.amount : -e.amount));
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final f = NumberFormat.currency(locale:'uk_UA', symbol:'₴');
+              return Scaffold(
+                appBar: AppBar(title: const Text('💸 Retro Budget MVP'),
+                  actions: [
+                    Padding(
+                      padding: const EdgeInsets.only(right:16),
+                      child: Center(child: Text(f.format(_balance),
+                          style: const TextStyle(color:Colors.amber,fontSize:18,fontWeight:FontWeight.bold))),
+                    )
+                  ],
+                ),
+                floatingActionButton: FloatingActionButton.extended(
+                  onPressed: () async {
+                    final newTx = await showModalBottomSheet<TxItem>(
+                      context: context,
+                      isScrollControlled:true,
+                      builder: (_) => AddTxSheet(categories:_categories),
+                    );
+                    if(newTx!=null) _addTx(newTx);
+                  },
+                  label: const Text('Додати'),
+                  icon: const Icon(Icons.add),
+                ),
+                body: _loading ? const Center(child:CircularProgressIndicator()) :
+                _items.isEmpty ? const Center(child:Text('Поки немає записів')) :
+                Column(
+                  children:[
+                    Expanded(
+                      flex:2,
+                      child: PieChart(
+                        PieChartData(
+                          sections: _categories.map((c){
+                            final sum = _items.where((e)=>e.category==c && e.type==TxType.expense).fold(0.0,(s,e)=>s+e.amount);
+                            if(sum==0) return null;
+                            return PieChartSectionData(
+                              title: c,
+                              value: sum,
+                              color: Colors.primaries[_categories.indexOf(c)%Colors.primaries.length],
+                            );
+                          }).whereType<PieChartSectionData>().toList(),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      flex:3,
+                      child: ListView.builder(
+                        itemCount:_items.length,
+                        itemBuilder:(ctx,i){
+                          final t=_items[i]; final isInc=t.type==TxType.income;
+                          return Dismissible(
+                            key: ValueKey(t.id),
+                            direction: DismissDirection.endToStart,
+                            onDismissed: (_)=>_removeTx(t.id),
+                            background: Container(color:Colors.red,alignment:Alignment.centerRight,padding:const EdgeInsets.only(right:20),child:const Icon(Icons.delete,color:Colors.white)),
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor:isInc?Colors.green:Colors.red,
+                                child: Icon(isInc?Icons.south_west:Icons.north_east,color:Colors.black),
+                              ),
+                              title: Text('${isInc?'+':'-'} ${f.format(t.amount)}'),
+                              subtitle: Text('${t.category} • ${DateFormat('dd.MM.yyyy').format(t.date)} ${t.note}'),
+                              onTap: (){
+                                if(t.imagePath!=null){
+                                  showDialog(context: context, builder:(_)=>Dialog(child:Image.file(File(t.imagePath!))));
+                                }
+                              },
+                            ),
+                          );
+                        }),
+                    ),
+                  ],
+                ),
+              );
+            }
+          }
+
+          // === BottomSheet для додавання транзакції ===
+          class AddTxSheet extends StatefulWidget {
+            final List<String> categories;
+            const AddTxSheet({super.key, required this.categories});
+            @override State<AddTxSheet> createState()=>_AddTxSheetState();
+          }
+
+          class _AddTxSheetState extends State<AddTxSheet>{
+            final _amountCtrl=TextEditingController();
+            final _noteCtrl=TextEditingController();
+            String _category='';
+            TxType _type=TxType.expense;
+            DateTime _date=DateTime.now();
+            String? _imagePath;
+
+            @override void initState(){super.initState();_category=widget.categories.first;}
+
+            void _pickImage() async {
+              final img = await ImagePicker().pickImage(source: ImageSource.camera);
+              if(img!=null){setState(()=>_imagePath=img.path);}
+            }
+
+            void _save(){
+              final amount=double.tryParse(_amountCtrl.text.replaceAll(',','.'))??0;
+              if(amount<=0) return;
+              final tx=TxItem(
+                id:DateTime.now().millisecondsSinceEpoch.toString(),
+                category:_category,
+                note:_noteCtrl.text.trim(),
+                amount:amount,
+                date:_date,
+                type:_type,
+                imagePath:_imagePath,
+              );
+              Navigator.of(context).pop(tx);
+            }
+
+            @override
+            Widget build(BuildContext ctx){
+              return Padding(
+                padding: EdgeInsets.only(bottom:MediaQuery.of(ctx).viewInsets.bottom,left:16,right:16,top:16),
+                child:SingleChildScrollView(
+                  child:Column(
+                    mainAxisSize:MainAxisSize.min,
+                    children:[
+                      DropdownButtonFormField<TxType>(
+                        value:_type,
+                        items: const [
+                          DropdownMenuItem(value:TxType.expense,child:Text('Витрата')),
+                          DropdownMenuItem(value:TxType.income,child:Text('Дохід')),
+                        ],
+                        onChanged:(v)=>setState(()=>_type=v!),
+                      ),
+                      DropdownButtonFormField<String>(
+                        value:_category,
+                        items:widget.categories.map((c)=>DropdownMenuItem(value:c,child:Text(c))).toList(),
+                        onChanged:(v)=>setState(()=>_category=v!),
+                      ),
+                      TextField(controller:_amountCtrl,keyboardType:TextInputType.number,decoration:const InputDecoration(labelText:'Сума ₴')),
+                      TextField(controller:_noteCtrl,decoration:const InputDecoration(labelText:'Нотатка')),
+                      Row(
+                        children:[
+                          Expanded(child:TextButton.icon(icon:const Icon(Icons.calendar_today),label:Text(DateFormat('dd.MM.yyyy').format(_date)),onPressed:() async{
+                            final picked=await showDatePicker(context:ctx,firstDate:DateTime(2020),lastDate:DateTime.now().add(const Duration(days:365)),initialDate:_date);
+                            if(picked!=null)setState(()=>_date=picked);
+                          })),
+                          IconButton(onPressed:_pickImage,icon:const Icon(Icons.camera_alt)),
+                        ],
+                      ),
+                      ElevatedButton(onPressed:_save,child:const Text('Додати')),
+                    ],
+                  ),
+                ),
+              );
+            }
+          }
+          EOF
+
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: Build split APKs (debug)
+        working-directory: app
+        run: flutter build apk --debug --split-per-abi
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: retro_apk_debug_split
+          path: app/build/app/outputs/flutter-apk/*.apk
