@@ -1,0 +1,181 @@
+name: Build RetroBudget (minimal, debug, split)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+
+      - name: Create Flutter project
+        run: |
+          flutter create app \
+            --platforms=android \
+            --project-name=retrobudget_min \
+            --org com.rb.min \
+            --overwrite
+
+      - name: Write minimal main.dart
+        working-directory: app
+        run: |
+          cat > lib/main.dart << 'EOF'
+          import 'package:flutter/material.dart';
+
+          void main() => runApp(const RetroBudgetApp());
+
+          class RetroBudgetApp extends StatelessWidget {
+            const RetroBudgetApp({super.key});
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                title: 'Ретро-бюджет (мінімум)',
+                theme: ThemeData.dark().copyWith(
+                  scaffoldBackgroundColor: const Color(0xFF0E1F17),
+                  colorScheme: const ColorScheme.dark(
+                    primary: Color(0xFFFFFC94),
+                    secondary: Color(0xFFFFB347),
+                  ),
+                  appBarTheme: const AppBarTheme(backgroundColor: Colors.black),
+                ),
+                home: const HomePage(),
+              );
+            }
+          }
+
+          class Expense {
+            final String category;
+            final double amount;
+            Expense(this.category, this.amount);
+          }
+
+          class HomePage extends StatefulWidget {
+            const HomePage({super.key});
+            @override
+            State<HomePage> createState() => _HomePageState();
+          }
+
+          class _HomePageState extends State<HomePage> {
+            double balance = 1000;
+            final List<Expense> expenses = [
+              Expense("Їжа", 120),
+              Expense("Транспорт", 60),
+              Expense("Розваги", 90),
+            ];
+
+            void _addExpense() {
+              final catCtrl = TextEditingController();
+              final amtCtrl = TextEditingController();
+              showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text("Додати витрату"),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: catCtrl,
+                        decoration: const InputDecoration(labelText: "Категорія"),
+                      ),
+                      TextField(
+                        controller: amtCtrl,
+                        decoration: const InputDecoration(labelText: "Сума"),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ],
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text("Скасувати"),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        final amt = double.tryParse(amtCtrl.text) ?? 0;
+                        if (amt > 0 && catCtrl.text.isNotEmpty) {
+                          setState(() {
+                            expenses.add(Expense(catCtrl.text, amt));
+                            balance -= amt;
+                          });
+                          Navigator.pop(context);
+                        }
+                      },
+                      child: const Text("Додати"),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(title: const Text("Ретро-бюджет (мінімум)")),
+                body: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(
+                        "Баланс: ${balance.toStringAsFixed(2)} ₴",
+                        style: const TextStyle(fontSize: 20),
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 12),
+                      child: Text("Витрати:", style: TextStyle(fontSize: 16)),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ListView.separated(
+                        itemCount: expenses.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, i) {
+                          final e = expenses[i];
+                          return ListTile(
+                            leading: const Icon(Icons.money, color: Colors.amber),
+                            title: Text(e.category),
+                            trailing: Text("-${e.amount.toStringAsFixed(2)} ₴"),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                floatingActionButton: FloatingActionButton(
+                  onPressed: _addExpense,
+                  child: const Icon(Icons.add),
+                ),
+              );
+            }
+          }
+          EOF
+
+      - name: flutter pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: Build split APKs (debug)
+        working-directory: app
+        run: flutter build apk --debug --split-per-abi
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrobudget_min_apk_debug_split
+          path: app/build/app/outputs/flutter-apk/*.apk
