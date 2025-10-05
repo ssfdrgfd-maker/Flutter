@@ -1,0 +1,304 @@
+name: Build Retro Budget APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Забрати (якщо треба) файли з репозиторію
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Java 17
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 3. Flutter (стабільна 3.24.0)
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.24.0'
+
+      - name: Flutter version
+        run: flutter --version
+
+      # 4. Створити чистий флаттер-проєкт у папці app-src
+      - name: Create Flutter project
+        run: |
+          flutter create app-src --platforms=android --org com.retro.budget --project-name retrobudget
+          ls -la app-src
+
+      # 5. Підмінити lib/main.dart нашим кодом
+      - name: Inject our main.dart
+        run: |
+          cat > app-src/lib/main.dart <<'DART'
+          import 'dart:convert';
+          import 'package:flutter/material.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
+
+          void main() => runApp(const RetroBudgetApp());
+
+          class RetroBudgetApp extends StatelessWidget {
+            const RetroBudgetApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              final base = ThemeData.dark(useMaterial3: true);
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                title: 'Ретро-бюджет',
+                theme: base.copyWith(
+                  colorScheme: base.colorScheme.copyWith(
+                    primary: const Color(0xFFFFFC94), // теплий жовтий
+                    secondary: const Color(0xFF8FC0AA), // пастельно-зелений
+                  ),
+                  scaffoldBackgroundColor: const Color(0xFF0F0E17),
+                  appBarTheme: base.appBarTheme.copyWith(
+                    backgroundColor: Colors.black,
+                    foregroundColor: Colors.white,
+                    titleTextStyle: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 20,
+                      color: Colors.white,
+                    ),
+                  ),
+                  floatingActionButtonTheme: const FloatingActionButtonThemeData(
+                    backgroundColor: Color(0xFFFFFC94),
+                    foregroundColor: Colors.black,
+                  ),
+                ),
+                home: const HomePage(),
+              );
+            }
+          }
+
+          class Expense {
+            final String title;
+            final double amount;
+            final DateTime date;
+
+            Expense({required this.title, required this.amount, required this.date});
+
+            Map<String, dynamic> toJson() => {
+              'title': title,
+              'amount': amount,
+              'date': date.toIso8601String(),
+            };
+
+            factory Expense.fromJson(Map<String, dynamic> json) => Expense(
+              title: json['title'] as String,
+              amount: (json['amount'] as num).toDouble(),
+              date: DateTime.parse(json['date'] as String),
+            );
+          }
+
+          class HomePage extends StatefulWidget {
+            const HomePage({super.key});
+
+            @override
+            State<HomePage> createState() => _HomePageState();
+          }
+
+          class _HomePageState extends State<HomePage> {
+            static const _storeKey = 'expenses_v1';
+            final List<Expense> _items = [];
+
+            double get _total => _items.fold(0.0, (s, e) => s + e.amount);
+
+            @override
+            void initState() {
+              super.initState();
+              _load();
+            }
+
+            Future<void> _load() async {
+              final prefs = await SharedPreferences.getInstance();
+              final raw = prefs.getString(_storeKey);
+              if (raw == null) return;
+              final List data = jsonDecode(raw) as List;
+              _items
+                ..clear()
+                ..addAll(data.map((e) => Expense.fromJson(e as Map<String, dynamic>)));
+              setState(() {});
+            }
+
+            Future<void> _save() async {
+              final prefs = await SharedPreferences.getInstance();
+              final raw = jsonEncode(_items.map((e) => e.toJson()).toList());
+              await prefs.setString(_storeKey, raw);
+            }
+
+            Future<void> _addExpense() async {
+              final titleCtrl = TextEditingController();
+              final amountCtrl = TextEditingController();
+
+              await showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                builder: (ctx) {
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      left: 16,
+                      right: 16,
+                      top: 12,
+                      bottom: 12 + MediaQuery.of(ctx).viewInsets.bottom,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text('Новий запис', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: titleCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Назва',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: amountCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: const InputDecoration(
+                            labelText: 'Сума',
+                            border: OutlineInputBorder(),
+                            prefixText: '₴ ',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: () {
+                              final t = titleCtrl.text.trim();
+                              final a = double.tryParse(amountCtrl.text.replaceAll(',', '.')) ?? 0;
+                              if (t.isEmpty || a <= 0) {
+                                Navigator.pop(ctx);
+                                return;
+                              }
+                              setState(() {
+                                _items.add(Expense(title: t, amount: a, date: DateTime.now()));
+                              });
+                              _save();
+                              Navigator.pop(ctx);
+                            },
+                            child: const Text('Додати'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            }
+
+            Future<void> _clearAll() async {
+              final ok = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Очистити все?'),
+                  content: const Text('Цю дію не можна скасувати.'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Скасувати')),
+                    ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Очистити')),
+                  ],
+                ),
+              );
+              if (ok == true) {
+                setState(() => _items.clear());
+                await _save();
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text('Ретро-бюджет'),
+                  actions: [
+                    IconButton(onPressed: _clearAll, icon: const Icon(Icons.delete_forever)),
+                  ],
+                ),
+                floatingActionButton: FloatingActionButton(
+                  onPressed: _addExpense,
+                  child: const Icon(Icons.add),
+                ),
+                body: _items.isEmpty
+                    ? const Center(child: Text('Поки порожньо. Додай перший запис.'))
+                    : ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
+                        itemBuilder: (ctx, i) {
+                          final e = _items[i];
+                          return Dismissible(
+                            key: ValueKey('${e.title}-${e.date.millisecondsSinceEpoch}'),
+                            background: Container(
+                              color: Colors.red.shade700,
+                              alignment: Alignment.centerRight,
+                              padding: const EdgeInsets.only(right: 16),
+                              child: const Icon(Icons.delete, color: Colors.white),
+                            ),
+                            direction: DismissDirection.endToStart,
+                            onDismissed: (_) {
+                              setState(() => _items.removeAt(i));
+                              _save();
+                            },
+                            child: ListTile(
+                              title: Text(e.title),
+                              subtitle: Text(
+                                '${e.date.day.toString().padLeft(2, '0')}.${e.date.month.toString().padLeft(2, '0')}.${e.date.year}',
+                              ),
+                              trailing: Text('₴ ${e.amount.toStringAsFixed(2)}'),
+                            ),
+                          );
+                        },
+                        separatorBuilder: (_, __) => const Divider(height: 0),
+                        itemCount: _items.length,
+                      ),
+                bottomNavigationBar: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: const BoxDecoration(
+                    border: Border(top: BorderSide(color: Colors.white12)),
+                    color: Colors.black,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Разом:', style: TextStyle(fontSize: 16)),
+                      Text(
+                        '₴ ${_total.toStringAsFixed(2)}',
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+          }
+          DART
+
+      # 6. Додати пакети і стягнути залежності
+      - name: Add dependencies
+        working-directory: app-src
+        run: |
+          flutter pub add shared_preferences
+          flutter pub get
+
+      # 7. Збірка split APK (debug — без підпису)
+      - name: Build APK (split)
+        working-directory: app-src
+        run: flutter build apk --debug --split-per-abi
+
+      # 8. Вивантажити готові APK як артефакти
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: retro_apk_split
+          path: |
+            app-src/build/app/outputs/flutter-apk/*-debug.apk
