@@ -27,17 +27,16 @@ jobs:
           channel: 'stable'
 
       # 4. Якщо нема Flutter-проекту — створити його
-      - name: Ensure Flutter project exists
-        run: |
-          set -e
-          if [ ! -f "pubspec.yaml" ]; then
-            echo "⚙️ Створюю новий Flutter-проект у корені..."
-            flutter create . --platforms=android --project-name retrobudget
-          fi
-          if [ ! -d "android" ]; then
-            echo "📁 Додаю Android платформу..."
-            flutter create . --platforms=android
-          fi
+      - name: Detect Flutter project dir
+  run: |
+    echo "Checking project structure..."
+    ls -la
+    if [ -f "pubspec.yaml" ]; then
+      echo "✅ Flutter project detected."
+    else
+      echo "❌ pubspec.yaml not found."
+      exit 1
+    fi
 
       # 5. Оновити залежності
       - name: Flutter pub get
