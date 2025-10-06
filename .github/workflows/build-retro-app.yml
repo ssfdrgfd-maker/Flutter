@@ -1,4 +1,4 @@
-name: Build Android APK (release, split-per-abi)
+name: Build Android APK (release, modern embedding)
 
 on:
   workflow_dispatch:
@@ -9,18 +9,15 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      # 1) Отримати код
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Java 17
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3) Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -28,52 +25,49 @@ jobs:
           channel: stable
           cache: true
 
-      # 4) Перевірити, що ми у корені Flutter-проєкту
       - name: Verify project structure
         run: |
-          echo "Repo root:"
+          echo "Checking repo root..."
           ls -la
-          test -f pubspec.yaml || { echo "❌ pubspec.yaml not found in repo root"; exit 1; }
+          test -f pubspec.yaml || { echo "❌ pubspec.yaml not found!"; exit 1; }
           echo "✅ pubspec.yaml found"
 
-      # 5) Якщо немає android/, згенерувати його
-      - name: Ensure Android folder exists (generate if missing)
+      - name: Ensure Android folder exists
         run: |
           if [ ! -d "android" ]; then
-            echo "android/ not found. Generating Android platform..."
             flutter create . --platforms=android
           else
-            echo "✅ android/ found"
+            echo "✅ android/ exists"
           fi
 
-      # 6) Встановити залежності
       - name: Flutter pub get
         run: flutter pub get
 
-      # 7) Оновити Gradle/Kotlin до сучасних версій (best-effort)
-      - name: Patch Android Gradle & Kotlin (best effort)
+      - name: Patch Android Gradle & Kotlin
         shell: bash
         run: |
           set -e
+          if [ -f "android/build.gradle" ]; then
+            sed -i 's/ext\.kotlin_version\s*=.*$/ext.kotlin_version = "1.9.24"/' android/build.gradle || true
+          fi
           if [ -f "android/gradle/wrapper/gradle-wrapper.properties" ]; then
             sed -i 's/gradle-[0-9.]\+/gradle-8.7/g' android/gradle/wrapper/gradle-wrapper.properties || true
-            echo "gradle-wrapper.properties:"
-            cat android/gradle/wrapper/gradle-wrapper.properties
           fi
 
-          # Підняти Kotlin, якщо оголошений як ext.kotlin_version або kotlin_version
-          if [ -f "android/build.gradle" ]; then
-            sed -i 's/ext\.kotlin_version\s*=\s*"[0-9.]\+"/ext.kotlin_version = "1.9.24"/g' android/build.gradle || true
-            sed -i 's/kotlin_version\s*=\s*"[0-9.]\+"/kotlin_version = "1.9.24"/g' android/build.gradle || true
+      - name: Migrate to new Flutter Android embedding (v2)
+        run: |
+          if grep -r "io.flutter.app.FlutterActivity" android/app/src/main/java; then
+            echo "Migrating old embedding → v2..."
+            find android/app/src/main/java -type f -name "*.java" -exec sed -i 's/io.flutter.app.FlutterActivity/io.flutter.embedding.android.FlutterActivity/g' {} +
+          else
+            echo "✅ Using modern embedding already"
           fi
 
-      # 8) Збірка спліт-APK
       - name: Build APK (split per ABI, release)
         run: flutter build apk --release --split-per-abi
 
-      # 9) Вивантажити артефакти
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: retro_apk_release_split
+          name: retro_apk_release
           path: build/app/outputs/flutter-apk/*-release.apk
