@@ -1,0 +1,347 @@
+name: Build Retro Budget APK (auto)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Отримати репозиторій
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2) Java 17
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 3) Flutter stable 3.24.0
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
+
+      # 4) Створити «чистий» Flutter-проєкт
+      - name: Create Flutter project
+        run: |
+          flutter --version
+          flutter create app-src -t app --org com.rb.unique12 --project-name retrobudget
+
+      # 5) Підмінити pubspec.yaml (мінімальні залежності)
+      - name: Inject pubspec.yaml
+        working-directory: app-src
+        run: |
+          cat > pubspec.yaml <<'EOF'
+          name: retrobudget
+          description: A simple offline retro budget app
+          publish_to: "none"
+          version: 1.0.0+1
+
+          environment:
+            sdk: ">=3.3.0 <4.0.0"
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            shared_preferences: ^2.2.3
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^4.0.0
+
+          flutter:
+            uses-material-design: true
+            assets:
+              - assets/
+          EOF
+
+      # 6) Підмінити головний файл програми
+      - name: Inject lib/main.dart
+        working-directory: app-src
+        run: |
+          mkdir -p lib
+          cat > lib/main.dart <<'EOF'
+          import 'dart:convert';
+          import 'package:flutter/material.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
+
+          void main() => runApp(const RetroBudgetApp());
+
+          class RetroBudgetApp extends StatelessWidget {
+            const RetroBudgetApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              final base = ThemeData.dark(useMaterial3: true);
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                title: 'Ретро-бюджет',
+                theme: base.copyWith(
+                  scaffoldBackgroundColor: const Color(0xFF0F0E17),
+                  colorScheme: base.colorScheme.copyWith(
+                    primary: const Color(0xFFFFFC94),
+                    secondary: const Color(0xFFFB8C00),
+                  ),
+                  appBarTheme: base.appBarTheme.copyWith(
+                    backgroundColor: Colors.black,
+                    foregroundColor: Colors.white,
+                    titleTextStyle: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 20,
+                      color: Colors.white,
+                    ),
+                  ),
+                  floatingActionButtonTheme:
+                      const FloatingActionButtonThemeData(
+                    backgroundColor: Color(0xFFFFFC94),
+                    foregroundColor: Colors.black,
+                  ),
+                  inputDecorationTheme: const InputDecorationTheme(
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                home: const HomePage(),
+              );
+            }
+          }
+
+          class Expense {
+            final String title;
+            final double amount;
+            final DateTime date;
+
+            Expense(this.title, this.amount, this.date);
+
+            Map<String, dynamic> toJson() => {
+                  'title': title,
+                  'amount': amount,
+                  'date': date.toIso8601String(),
+                };
+
+            factory Expense.fromJson(Map<String, dynamic> json) => Expense(
+                  json['title'] as String,
+                  (json['amount'] as num).toDouble(),
+                  DateTime.parse(json['date'] as String),
+                );
+          }
+
+          class HomePage extends StatefulWidget {
+            const HomePage({super.key});
+
+            @override
+            State<HomePage> createState() => _HomePageState();
+          }
+
+          class _HomePageState extends State<HomePage> {
+            final List<Expense> _items = [];
+            bool _loading = true;
+
+            @override
+            void initState() {
+              super.initState();
+              _load();
+            }
+
+            Future<void> _load() async {
+              final prefs = await SharedPreferences.getInstance();
+              final raw = prefs.getString('expenses') ?? '[]';
+              final list = (jsonDecode(raw) as List)
+                  .map((e) => Expense.fromJson(e as Map<String, dynamic>))
+                  .toList();
+              setState(() {
+                _items
+                  ..clear()
+                  ..addAll(list);
+                _loading = false;
+              });
+            }
+
+            Future<void> _save() async {
+              final prefs = await SharedPreferences.getInstance();
+              final raw = jsonEncode(_items.map((e) => e.toJson()).toList());
+              await prefs.setString('expenses', raw);
+            }
+
+            double get _total =>
+                _items.fold(0.0, (s, e) => s + e.amount);
+
+            void _addItem() async {
+              final result = await showDialog<Expense>(
+                context: context,
+                builder: (_) => const _AddExpenseDialog(),
+              );
+              if (result != null) {
+                setState(() => _items.add(result));
+                _save();
+              }
+            }
+
+            void _removeAt(int index) {
+              setState(() => _items.removeAt(index));
+              _save();
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text('Ретро-бюджет'),
+                ),
+                floatingActionButton: FloatingActionButton(
+                  onPressed: _addItem,
+                  child: const Icon(Icons.add),
+                ),
+                body: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : Column(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text('Витрати цього місяця',
+                                    style:
+                                        TextStyle(fontWeight: FontWeight.w600)),
+                                Text(
+                                  '${_total.toStringAsFixed(2)} ₴',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 18,
+                                      color: Color(0xFFFFFC94)),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Divider(height: 0),
+                          Expanded(
+                            child: _items.isEmpty
+                                ? const Center(
+                                    child: Text('Ще немає витрат. Додай першу.'),
+                                  )
+                                : ListView.separated(
+                                    itemCount: _items.length,
+                                    separatorBuilder: (_, __) =>
+                                        const Divider(height: 0),
+                                    itemBuilder: (context, i) {
+                                      final e = _items[i];
+                                      return Dismissible(
+                                        key: ValueKey('${e.title}${e.date}'),
+                                        background: Container(
+                                          color: Colors.red,
+                                          alignment: Alignment.centerRight,
+                                          padding:
+                                              const EdgeInsets.only(right: 16),
+                                          child:
+                                              const Icon(Icons.delete, color: Colors.white),
+                                        ),
+                                        direction: DismissDirection.endToStart,
+                                        onDismissed: (_) => _removeAt(i),
+                                        child: ListTile(
+                                          title: Text(e.title),
+                                          subtitle: Text(
+                                              '${e.date.day.toString().padLeft(2, '0')}.'
+                                              '${e.date.month.toString().padLeft(2, '0')}.'
+                                              '${e.date.year}'),
+                                          trailing: Text(
+                                            '- ${e.amount.toStringAsFixed(2)} ₴',
+                                            style: const TextStyle(
+                                                color: Colors.orangeAccent,
+                                                fontWeight: FontWeight.w700),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ],
+                      ),
+              );
+            }
+          }
+
+          class _AddExpenseDialog extends StatefulWidget {
+            const _AddExpenseDialog();
+
+            @override
+            State<_AddExpenseDialog> createState() => _AddExpenseDialogState();
+          }
+
+          class _AddExpenseDialogState extends State<_AddExpenseDialog> {
+            final _title = TextEditingController();
+            final _amount = TextEditingController();
+
+            @override
+            void dispose() {
+              _title.dispose();
+              _amount.dispose();
+              super.dispose();
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return AlertDialog(
+                title: const Text('Новий витрата'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: _title,
+                      decoration: const InputDecoration(labelText: 'Назва'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _amount,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Сума'),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Скасувати'),
+                  ),
+                  FilledButton(
+                    onPressed: () {
+                      final title = _title.text.trim();
+                      final value = double.tryParse(_amount.text.replaceAll(',', '.')) ?? 0;
+                      if (title.isEmpty || value <= 0) {
+                        Navigator.pop(context);
+                        return;
+                      }
+                      Navigator.pop(context, Expense(title, value, DateTime.now()));
+                    },
+                    child: const Text('Додати'),
+                  ),
+                ],
+              );
+            }
+          }
+          EOF
+
+      # 7) Отримати залежності
+      - name: flutter pub get
+        working-directory: app-src
+        run: flutter pub get
+
+      # 8) Зібрати APK (split-per-abi)
+      - name: Build APK (release split)
+        working-directory: app-src
+        run: flutter build apk --release --split-per-abi
+
+      # 9) Завантажити .apk як артефакти
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: retro_apk_release_split
+          path: app-src/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
