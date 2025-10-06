@@ -1,0 +1,123 @@
+name: Build Retro Budget APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Отримати код
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2) Java 17
+      - name: Setup Java (17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 3) Flutter (3.24.0 – під Java 17 і новий AGP)
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          cache: true
+
+      # 4) Визначити, де лежить Flutter-проєкт
+      - name: Detect Flutter project dir
+        id: detect
+        shell: bash
+        run: |
+          if [ -d "android" ]; then
+            echo "PROJECT_DIR=." >> $GITHUB_ENV
+            echo "Found project at ./"
+          elif [ -d "app-src/android" ]; then
+            echo "PROJECT_DIR=app-src" >> $GITHUB_ENV
+            echo "Found project at ./app-src"
+          else
+            echo "❌ Flutter project not found (no android/ or app-src/android)."
+            exit 1
+          fi
+
+      # 5) Патч Android Gradle / Kotlin / Java 17 (фікс твоєї помилки)
+      - name: Patch Android Gradle & Kotlin to modern, set Java 17
+        working-directory: ${{ env.PROJECT_DIR }}/android
+        shell: bash
+        run: |
+          set -e
+
+          # Gradle wrapper -> 8.7
+          if [ -f gradle/wrapper/gradle-wrapper.properties ]; then
+            sed -i 's#distributionUrl=.*#distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-all.zip#' gradle/wrapper/gradle-wrapper.properties
+          fi
+
+          # root android/build.gradle – старий стиль classpath/ ext.kotlin_version
+          if [ -f build.gradle ]; then
+            sed -i 's/com\.android\.tools\.build:gradle:[0-9.]\+/com.android.tools.build:gradle:8.7.2/g' build.gradle || true
+
+            if grep -q "ext.kotlin_version" build.gradle; then
+              sed -i "s/ext\.kotlin_version\s*=\s*['\"][0-9.]\+['\"]/ext.kotlin_version = '2.0.21'/" build.gradle
+            fi
+          fi
+
+          # settings.gradle – новий стиль plugins{}
+          if [ -f settings.gradle ]; then
+            sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.0.21"/' settings.gradle || true
+            sed -i 's/id("org.jetbrains.kotlin.android") version "[^"]*"/id("org.jetbrains.kotlin.android") version "2.0.21"/' settings.gradle || true
+            sed -i 's/id "com.android.application" version "[^"]*"/id "com.android.application" version "8.7.2"/' settings.gradle || true
+            sed -i 's/id("com.android.application") version "[^"]*"/id("com.android.application") version "8.7.2"/' settings.gradle || true
+          fi
+
+          # app/build.gradle – Java/Kotlin 17
+          APP_GRADLE="app/build.gradle"
+          if [ -f "$APP_GRADLE" ]; then
+            # compileOptions під Java 17
+            if ! grep -q "compileOptions" "$APP_GRADLE"; then
+              sed -i '/android\s*{/a \
+                  compileOptions {\n\
+                      sourceCompatibility JavaVersion.VERSION_17\n\
+                      targetCompatibility JavaVersion.VERSION_17\n\
+                  }' "$APP_GRADLE"
+            else
+              sed -i 's/sourceCompatibility JavaVersion\.VERSION_[0-9]\+/sourceCompatibility JavaVersion.VERSION_17/' "$APP_GRADLE"
+              sed -i 's/targetCompatibility JavaVersion\.VERSION_[0-9]\+/targetCompatibility JavaVersion.VERSION_17/' "$APP_GRADLE"
+            fi
+
+            # kotlinOptions jvmTarget=17
+            if ! grep -q "kotlinOptions" "$APP_GRADLE"; then
+              sed -i '/android\s*{/a \
+                  kotlinOptions {\n\
+                      jvmTarget = "17"\n\
+                  }' "$APP_GRADLE"
+            else
+              sed -i 's/jvmTarget\s*=\s*"[0-9]\+"/jvmTarget = "17"/' "$APP_GRADLE"
+            fi
+
+            # плагіни у plugins{} всередині app/build.gradle (якщо раптом є)
+            sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.0.21"/' "$APP_GRADLE" || true
+            sed -i 's/id("org.jetbrains.kotlin.android") version "[^"]*"/id("org.jetbrains.kotlin.android") version "2.0.21"/' "$APP_GRADLE" || true
+            sed -i 's/id "com.android.application" version "[^"]*"/id "com.android.application" version "8.7.2"/' "$APP_GRADLE" || true
+            sed -i 's/id("com.android.application") version "[^"]*"/id("com.android.application") version "8.7.2"/' "$APP_GRADLE" || true
+          fi
+
+          echo "✅ Patched: Gradle 8.7, AGP 8.7.2, Kotlin 2.0.21, Java/Kotlin 17."
+
+      # 6) Залежності + збірка
+      - name: Flutter pub get
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter pub get
+
+      - name: Build APK (per-ABI)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter build apk --release --split-per-abi
+
+      # 7) Артефакти
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: retro_apk_release_split
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
