@@ -1,4 +1,4 @@
-name: Build Retro APK (auto-fix)
+name: Build Retro APK (auto-create project)
 
 on:
   workflow_dispatch: {}
@@ -8,48 +8,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1) Отримати код репозиторію
+      # 1. Отримати код
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Java 17
+      # 2. Встановити Java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # 3) Flutter (stable 3.24.0)
+      # 3. Встановити Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      # 4) Гарантуємо, що у корені є повноцінний Flutter-проєкт
-      #    Якщо pubspec.yaml відсутній — створимо проєкт у корені.
-      #    Якщо немає платформи android — додамо її.
+      # 4. Якщо нема Flutter-проекту — створити його
       - name: Ensure Flutter project exists
         run: |
           set -e
-          if [ ! -f pubspec.yaml ]; then
-            echo "No pubspec.yaml -> creating Flutter project in repo root"
-            flutter create . --platforms=android --org com.rb.unique12 --project-name retrobudget
+          if [ ! -f "pubspec.yaml" ]; then
+            echo "⚙️ Створюю новий Flutter-проект у корені..."
+            flutter create . --platforms=android --project-name retrobudget
           fi
-          if [ ! -d android ]; then
-            echo "No android/ folder -> adding Android platform"
+          if [ ! -d "android" ]; then
+            echo "📁 Додаю Android платформу..."
             flutter create . --platforms=android
           fi
 
-      # 5) Встановити залежності
+      # 5. Оновити залежності
       - name: Flutter pub get
         run: flutter pub get
 
-      # 6) Зібрати APK (окремо під кожен ABI)
+      # 6. Зібрати APK
       - name: Build APK
         run: flutter build apk --release --split-per-abi
 
-      # 7) Завантажити артефакти
+      # 7. Завантажити результат
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
