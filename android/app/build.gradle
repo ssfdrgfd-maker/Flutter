@@ -1,6 +1,7 @@
 plugins {
     id "com.android.application"
-    id "org.jetbrains.kotlin.android" version "1.9.24"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
 }
 
 android {
@@ -17,14 +18,11 @@ android {
 
     buildTypes {
         release {
-            // Для перших збірок достатньо debug-підпису
             signingConfig signingConfigs.debug
-            minifyEnabled false
-            shrinkResources false
         }
     }
 }
 
-dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.24"
+flutter {
+    source '../..'
 }
