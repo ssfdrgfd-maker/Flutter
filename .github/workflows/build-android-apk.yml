@@ -1,0 +1,61 @@
+name: Build Android APK (release, per-ABI)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Код репозиторію
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2) Java 17 (Gradle/Android вимагає)
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # 3) Flutter
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
+
+      # 4) Перевірка структури та дрібні автоправки
+      - name: Verify project layout
+        run: |
+          set -e
+          test -d android || { echo "::error::'android/' folder is missing"; exit 1; }
+          test -d lib || { echo "::error::'lib/' folder is missing"; exit 1; }
+          # Підстрахуємо minSdkVersion (не зашкодить, якщо вже 21+)
+          sed -i 's/minSdkVersion [0-9][0-9]*/minSdkVersion 21/' android/app/build.gradle || true
+
+      # 5) Залежності
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # 6) Clean (на випадок кешів)
+      - name: Flutter clean
+        run: flutter clean
+
+      # 7) Збірка APK по ABI (armeabi-v7a, arm64-v8a, x86_64)
+      - name: Build APK (per-ABI, release)
+        run: flutter build apk --release --split-per-abi
+
+      # 8) Завантаження артефактів
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: retro-apk
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 7
