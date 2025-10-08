@@ -6,7 +6,6 @@ plugins {
 
 android {
     namespace "com.example.flutter_app"
-
     compileSdkVersion 34
 
     defaultConfig {
@@ -19,22 +18,12 @@ android {
 
     buildTypes {
         release {
-            // Підпис від дебагу, щоб зібрати без власного keystore
             signingConfig signingConfigs.debug
-            minifyEnabled false
         }
     }
 }
 
-dependencies {
-    // Material Components — потрібен для Theme.MaterialComponents.*
-    implementation "com.google.android.material:material:1.12.0"
-
-    // (не обов’язково, але безпечно мати stdlib)
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.24"
-}
-
 flutter {
-    // не змінюй, якщо структура як у тебе
-    source "../../.."
+    // шлях від android/ до кореня проєкту з pubspec.yaml
+    source "../.."
 }
