@@ -1,8 +1,37 @@
 pluginManagement {
+    // Знайти шлях до Flutter SDK: спершу з ENV, потім з local.properties
+    def flutterSdkPath = System.getenv("FLUTTER_HOME") ?: System.getenv("FLUTTER_ROOT")
+    if (flutterSdkPath == null) {
+        def props = new Properties()
+        def lp = new File(rootDir, "local.properties")
+        if (lp.exists()) {
+            lp.withInputStream { props.load(it) }
+            flutterSdkPath = props.getProperty("flutter.sdk")
+        }
+    }
+    if (flutterSdkPath == null) {
+        throw new GradleException(
+            "Flutter SDK not found. Set FLUTTER_HOME/FLUTTER_ROOT or add flutter.sdk to android/local.properties"
+        )
+    }
+
+    // Підключаємо Flutter tools як included build — це і дає плагін dev.flutter.flutter-gradle-plugin
+    includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
+
     repositories {
         google()
         mavenCentral()
         gradlePluginPortal()
+        maven { url "https://storage.googleapis.com/download.flutter.io" }
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://storage.googleapis.com/download.flutter.io" }
     }
 }
 
