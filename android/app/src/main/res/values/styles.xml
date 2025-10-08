@@ -1,9 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
+
+    <!-- Тема для splash/launch екрану -->
     <style name="LaunchTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
+        <!-- Без зайвих ресурсів: беремо системний фон -->
+        <item name="android:windowBackground">?android:colorBackground</item>
     </style>
 
+    <!-- Основна тема активності -->
     <style name="NormalTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:windowBackground">?android:colorBackground</item>
     </style>
+
 </resources>
