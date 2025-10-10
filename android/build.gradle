@@ -1,18 +1,6 @@
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath "com.android.tools.build:gradle:8.5.2"
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.24"
-    }
-}
+// android/build.gradle (root)
+// Репозиторії та плагіни керуються через settings.gradle
 
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-        maven { url "https://storage.googleapis.com/download.flutter.io" }
-    }
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
 }
