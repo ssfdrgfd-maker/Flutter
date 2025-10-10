@@ -1,18 +1,9 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
-
-    <!-- 🌙 Тема для екрану запуску -->
+    <!-- Тема під час запуску (сплеш). MaterialComponents, без ActionBar -->
     <style name="LaunchTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="android:windowBackground">@drawable/launch_background</item>
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowBackground">@android:color/white</item>
     </style>
 
-    <!-- 🎨 Основна тема застосунку -->
-    <style name="NormalTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="android:windowBackground">?android:colorBackground</item>
-        <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
-        <item name="android:navigationBarColor">?attr/colorSurface</item>
-    </style>
-
+    <!-- Основна тема додатка після запуску -->
+    <style name="NormalTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar" />
 </resources>
