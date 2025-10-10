@@ -1,6 +1,4 @@
-// android/build.gradle (root)
-// Репозиторії та плагіни керуються через settings.gradle
-
+// android/build.gradle
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }
