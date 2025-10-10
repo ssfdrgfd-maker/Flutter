@@ -25,5 +25,10 @@ android {
 
 flutter {
     // шлях від android/ до кореня проєкту з pubspec.yaml
-    source "../.."
+    source "../../"
+}
+
+dependencies {
+    // ✅ додає підтримку Material Components (виправляє помилку стилів)
+    implementation 'com.google.android.material:material:1.12.0'
 }
